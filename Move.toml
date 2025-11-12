@@ -1,0 +1,12 @@
+[package]
+name = "veritaslog"
+version = "0.0.1"
+edition = "2024.beta"
+license = "MIT"
+authors = ["Dhisa (ijlalwindhi15@gmail.com)"]
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "testnet" }
+
+[addresses]
+veritaslog = "0x0"
