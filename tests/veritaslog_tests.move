@@ -15,6 +15,16 @@ module veritaslog::registry_tests {
         string::utf8(value)
     }
 
+    fun create_test_commitment(): vector<u8> {
+        // Create a 32-byte commitment for testing
+        vector[
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20
+        ]
+    }
+
     fun init_registry(): Scenario {
         let mut scenario = ts::begin(SUPER_ADMIN);
         {
@@ -127,17 +137,14 @@ module veritaslog::registry_tests {
             let ctx = ts::ctx(&mut scenario);
             
             let walrus_cid = create_test_string(b"bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi");
-            let title = create_test_string(b"Security Incident");
-            let severity = create_test_string(b"critical");
-            let module_name = create_test_string(b"Authentication");
+            let meta_commitment = create_test_commitment();
             
             registry::register_log(
                 &mut registry,
                 walrus_cid,
-                title,
-                severity,
-                module_name,
+                meta_commitment,
                 1699564800,
+                2, // HIGH severity
                 ctx
             );
             
@@ -160,17 +167,14 @@ module veritaslog::registry_tests {
             let ctx = ts::ctx(&mut scenario);
             
             let walrus_cid = create_test_string(b"test_cid");
-            let title = create_test_string(b"Test Log");
-            let severity = create_test_string(b"info");
-            let module_name = create_test_string(b"Test");
+            let meta_commitment = create_test_commitment();
             
             registry::register_log(
                 &mut registry,
                 walrus_cid,
-                title,
-                severity,
-                module_name,
+                meta_commitment,
                 1699564800,
+                0, // LOW severity
                 ctx
             );
             
@@ -200,17 +204,14 @@ module veritaslog::registry_tests {
             let ctx = ts::ctx(&mut scenario);
             
             let walrus_cid = create_test_string(b"test_cid");
-            let title = create_test_string(b"Test Log");
-            let severity = create_test_string(b"info");
-            let module_name = create_test_string(b"Test");
+            let meta_commitment = create_test_commitment();
             
             registry::register_log(
                 &mut registry,
                 walrus_cid,
-                title,
-                severity,
-                module_name,
+                meta_commitment,
                 1699564800,
+                0,
                 ctx
             );
             
@@ -250,17 +251,14 @@ module veritaslog::registry_tests {
             let ctx = ts::ctx(&mut scenario);
             
             let walrus_cid = create_test_string(b"test_cid");
-            let title = create_test_string(b"Test Log");
-            let severity = create_test_string(b"info");
-            let module_name = create_test_string(b"Test");
+            let meta_commitment = create_test_commitment();
             
             registry::register_log(
                 &mut registry,
                 walrus_cid,
-                title,
-                severity,
-                module_name,
+                meta_commitment,
                 1699564800,
+                0,
                 ctx
             );
             
@@ -311,17 +309,14 @@ module veritaslog::registry_tests {
             let ctx = ts::ctx(&mut scenario);
             
             let walrus_cid = create_test_string(b"test_cid");
-            let title = create_test_string(b"Test Log");
-            let severity = create_test_string(b"info");
-            let module_name = create_test_string(b"Test");
+            let meta_commitment = create_test_commitment();
             
             registry::register_log(
                 &mut registry,
                 walrus_cid,
-                title,
-                severity,
-                module_name,
+                meta_commitment,
                 1699564800,
+                0,
                 ctx
             );
             
@@ -373,30 +368,27 @@ module veritaslog::registry_tests {
             registry::register_log(
                 &mut registry,
                 create_test_string(b"cid_1"),
-                create_test_string(b"Log 1"),
-                create_test_string(b"critical"),
-                create_test_string(b"Security"),
+                create_test_commitment(),
                 1699564800,
+                2, // critical -> HIGH
                 ctx
             );
             
             registry::register_log(
                 &mut registry,
                 create_test_string(b"cid_2"),
-                create_test_string(b"Log 2"),
-                create_test_string(b"info"),
-                create_test_string(b"Operations"),
+                create_test_commitment(),
                 1699564900,
+                0, // info -> LOW
                 ctx
             );
             
             registry::register_log(
                 &mut registry,
                 create_test_string(b"cid_3"),
-                create_test_string(b"Log 3"),
-                create_test_string(b"warning"),
-                create_test_string(b"Database"),
+                create_test_commitment(),
                 1699565000,
+                1, // warning -> MEDIUM
                 ctx
             );
             
@@ -428,10 +420,9 @@ module veritaslog::registry_tests {
             registry::register_log(
                 &mut registry,
                 create_test_string(b"test_cid"),
-                create_test_string(b"Test Log"),
-                create_test_string(b"info"),
-                create_test_string(b"Test"),
+                create_test_commitment(),
                 1699564800,
+                0,
                 ctx
             );
             

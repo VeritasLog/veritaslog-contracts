@@ -1,10 +1,18 @@
 module veritaslog::registry {
-    use std::string::{String};
     use std::vector;
+    use std::string::String;
+
+    use sui::event;
     use sui::object::{Self, UID};
+    use sui::table::{Self, Table};
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
-    use sui::table::{Self, Table};
+
+    /// Error codes
+    const E_NOT_ADMIN: u64 = 1;
+    const E_REGISTER_FORBIDDEN: u64 = 2;
+    const E_APPROVE_FORBIDDEN: u64 = 3;
+    const E_BAD_COMMITMENT_LEN: u64 = 10;
 
     /// Main shared registry object for managing compliance logs
     public struct VeritasLogRegistry has key {
@@ -15,16 +23,28 @@ module veritaslog::registry {
         logs: Table<u64, Log>,
     }
 
-    /// Compliance log entry with access control
+    /// Compact on-chain record (NO plaintext fields)
+    /// - walrus_cid: pointer to encrypted/normalized bundle in Walrus
+    /// - meta_commitment: 32-byte seal-compatible commitment (sha256 or proof root)
+    /// - severity_code: 0=LOW, 1=MEDIUM, 2=HIGH (expand later bila perlu)
     public struct Log has store, drop {
         walrus_cid: String,
         owner: address,
         allowed: vector<address>,
-        title: String,
-        severity: String,
-        module_name: String,
         created_at: u64,
+        severity_code: u8,
+        meta_commitment: vector<u8>, // expect 32 bytes
         pending: vector<address>,
+    }
+
+    /// Event for indexers
+    public struct RegisterLogEvent has copy, drop {
+        log_id: u64,
+        walrus_cid: String,
+        created_at: u64,
+        severity_code: u8,
+        commitment: vector<u8>,
+        owner: address,
     }
 
     /// Initialize the registry once and share it
@@ -36,7 +56,6 @@ module veritaslog::registry {
             next_log_id: 0,
             logs: table::new<u64, Log>(ctx),
         };
-
         transfer::share_object(registry);
     }
 
@@ -46,21 +65,27 @@ module veritaslog::registry {
         new_admin: address,
         ctx: &mut TxContext
     ) {
-        assert!(is_admin_internal(registry, ctx), 1);
+        assert!(is_admin_internal(registry, ctx), E_NOT_ADMIN);
         vector::push_back(&mut registry.admins, new_admin);
     }
 
-    /// Register a new compliance log (admin only)
+    /// Register a new compliance log (admin only, PRIVACY-PRESERVING)
+    /// - `walrus_cid` : pointer ke blob Walrus (bundle JSON terenkripsi/ternormalisasi)
+    /// - `meta_commitment` : 32-byte commitment dari bundle/meta (sha256/Seal root)
+    /// - `created_at` : epoch seconds
+    /// - `severity_code` : 0/1/2 (LOW/MEDIUM/HIGH)
     public entry fun register_log(
         registry: &mut VeritasLogRegistry,
         walrus_cid: String,
-        title: String,
-        severity: String,
-        module_name: String,
+        meta_commitment: vector<u8>,
         created_at: u64,
+        severity_code: u8,
         ctx: &mut TxContext
     ) {
-        assert!(is_admin_internal(registry, ctx), 2);
+        assert!(is_admin_internal(registry, ctx), E_REGISTER_FORBIDDEN);
+        // Commitment should 32 bytes (sha256)
+        let len = vector::length(&meta_commitment);
+        assert!(len == 32, E_BAD_COMMITMENT_LEN);
 
         let id = registry.next_log_id;
         registry.next_log_id = id + 1;
@@ -71,14 +96,23 @@ module veritaslog::registry {
             walrus_cid,
             owner,
             allowed: vector::singleton<address>(owner),
-            title,
-            severity,
-            module_name: module_name,
             created_at,
+            severity_code,
+            meta_commitment,
             pending: vector::empty<address>(),
         };
 
         table::add(&mut registry.logs, id, log);
+
+        // Emit event for indexer
+        event::emit(RegisterLogEvent {
+            log_id: id,
+            walrus_cid: table::borrow(&registry.logs, id).walrus_cid,
+            created_at,
+            severity_code,
+            commitment: table::borrow(&registry.logs, id).meta_commitment,
+            owner,
+        });
     }
 
     /// Request access to a specific log (auditors/public)
@@ -102,7 +136,7 @@ module veritaslog::registry {
         requester: address,
         ctx: &mut TxContext
     ) {
-        assert!(is_admin_internal(registry, ctx), 3);
+        assert!(is_admin_internal(registry, ctx), E_APPROVE_FORBIDDEN);
         let log_ref = table::borrow_mut(&mut registry.logs, log_id);
 
         remove_pending(&mut log_ref.pending, requester);
@@ -128,33 +162,23 @@ module veritaslog::registry {
     /// Check if address is admin or super_admin
     fun is_admin_internal(registry: &VeritasLogRegistry, ctx: &TxContext): bool {
         let sender = tx_context::sender(ctx);
-        if (sender == registry.super_admin) {
-            return true
-        };
+        if (sender == registry.super_admin) { return true };
         vector::contains(&registry.admins, &sender)
     }
 
     // ==================== Test-only functions ====================
     #[test_only]
-    public fun init_for_testing(ctx: &mut TxContext) {
-        init(ctx);
-    }
+    public fun init_for_testing(ctx: &mut TxContext) { init(ctx); }
 
     #[test_only]
-    public fun get_super_admin(registry: &VeritasLogRegistry): address {
-        registry.super_admin
-    }
+    public fun get_super_admin(registry: &VeritasLogRegistry): address { registry.super_admin }
 
     #[test_only]
-    public fun get_next_log_id(registry: &VeritasLogRegistry): u64 {
-        registry.next_log_id
-    }
+    public fun get_next_log_id(registry: &VeritasLogRegistry): u64 { registry.next_log_id }
 
     #[test_only]
     public fun is_admin(registry: &VeritasLogRegistry, addr: address): bool {
-        if (addr == registry.super_admin) {
-            return true
-        };
+        if (addr == registry.super_admin) { return true };
         vector::contains(&registry.admins, &addr)
     }
 }
