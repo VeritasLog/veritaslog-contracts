@@ -13,6 +13,7 @@ module veritaslog::registry {
     const E_REGISTER_FORBIDDEN: u64 = 2;
     const E_APPROVE_FORBIDDEN: u64 = 3;
     const E_BAD_COMMITMENT_LEN: u64 = 10;
+    const E_NO_ACCESS: u64 = 11;
 
     /// Main shared registry object for managing compliance logs
     public struct VeritasLogRegistry has key {
@@ -123,7 +124,7 @@ module veritaslog::registry {
     ) {
         let sender = tx_context::sender(ctx);
         let log_ref = table::borrow_mut(&mut registry.logs, log_id);
-        
+
         if (!vector::contains(&log_ref.pending, &sender)) {
             vector::push_back(&mut log_ref.pending, sender);
         }
@@ -144,6 +145,20 @@ module veritaslog::registry {
         if (!vector::contains(&log_ref.allowed, &requester)) {
             vector::push_back(&mut log_ref.allowed, requester);
         }
+    }
+
+    public entry fun seal_approve(
+    id: vector<u8>,
+    registry: &VeritasLogRegistry,
+    log_id: u64,
+    ctx: &TxContext,
+    ) {
+        let sender = tx_context::sender(ctx);
+        let log_ref = table::borrow(&registry.logs, log_id);
+
+        assert!(vector::contains(&log_ref.allowed, &sender), E_NO_ACCESS);
+
+        assert!(id == log_ref.meta_commitment, E_NO_ACCESS);
     }
 
     /// Remove address from pending requests vector
