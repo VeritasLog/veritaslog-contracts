@@ -15,6 +15,13 @@ module veritaslog::registry {
     const E_BAD_COMMITMENT_LEN: u64 = 10;
     const E_NO_ACCESS: u64 = 11;
 
+    /// Struct for storing access request details
+    public struct AccessRequest has store, drop, copy {
+        requester: address,
+        reason: String,
+        requested_at: u64,
+    }
+
     /// Main shared registry object for managing compliance logs
     public struct VeritasLogRegistry has key {
         id: UID,
@@ -36,6 +43,7 @@ module veritaslog::registry {
         severity_code: u8,
         meta_commitment: vector<u8>, // expect 32 bytes
         pending: vector<address>,
+        access_requests: vector<AccessRequest>,
     }
 
     /// Event for indexers
@@ -46,6 +54,31 @@ module veritaslog::registry {
         severity_code: u8,
         commitment: vector<u8>,
         owner: address,
+    }
+
+    /// Event when access is requested
+    public struct AccessRequestEvent has copy, drop {
+        log_id: u64,
+        requester: address,
+        reason: String,
+        requested_at: u64,
+    }
+
+    /// Event when access is approved
+    public struct AccessApprovedEvent has copy, drop {
+        log_id: u64,
+        requester: address,
+        approved_by: address,
+        approved_at: u64,
+    }
+
+    /// Event when access is rejected
+    public struct AccessRejectedEvent has copy, drop {
+        log_id: u64,
+        requester: address,
+        rejected_by: address,
+        rejected_at: u64,
+        reason: String,
     }
 
     /// Initialize the registry once and share it
@@ -101,6 +134,7 @@ module veritaslog::registry {
             severity_code,
             meta_commitment,
             pending: vector::empty<address>(),
+            access_requests: vector::empty<AccessRequest>(),
         };
 
         table::add(&mut registry.logs, id, log);
@@ -120,13 +154,32 @@ module veritaslog::registry {
     public entry fun request_access(
         registry: &mut VeritasLogRegistry,
         log_id: u64,
+        reason: String,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let log_ref = table::borrow_mut(&mut registry.logs, log_id);
-
+        let current_time = tx_context::epoch(ctx);
+        
+        // Check if already requested
         if (!vector::contains(&log_ref.pending, &sender)) {
             vector::push_back(&mut log_ref.pending, sender);
+            
+            // Save request details
+            let request = AccessRequest {
+                requester: sender,
+                reason,
+                requested_at: current_time,
+            };
+            vector::push_back(&mut log_ref.access_requests, request);
+
+            // Emit event
+            event::emit(AccessRequestEvent {
+                log_id,
+                requester: sender,
+                reason,
+                requested_at: current_time,
+            });
         }
     }
 
@@ -141,10 +194,72 @@ module veritaslog::registry {
         let log_ref = table::borrow_mut(&mut registry.logs, log_id);
 
         remove_pending(&mut log_ref.pending, requester);
+        remove_access_request(&mut log_ref.access_requests, requester);
 
         if (!vector::contains(&log_ref.allowed, &requester)) {
             vector::push_back(&mut log_ref.allowed, requester);
-        }
+        };
+
+        // Emit event
+        event::emit(AccessApprovedEvent {
+            log_id,
+            requester,
+            approved_by: tx_context::sender(ctx),
+            approved_at: tx_context::epoch(ctx),
+        });
+    }
+
+    /// Reject access request (admin only)
+    public entry fun reject_access(
+        registry: &mut VeritasLogRegistry,
+        log_id: u64,
+        requester: address,
+        reason: String,
+        ctx: &mut TxContext
+    ) {
+        assert!(is_admin_internal(registry, ctx), E_APPROVE_FORBIDDEN);
+        let log_ref = table::borrow_mut(&mut registry.logs, log_id);
+
+        remove_pending(&mut log_ref.pending, requester);
+        remove_access_request(&mut log_ref.access_requests, requester);
+
+        // Emit event
+        event::emit(AccessRejectedEvent {
+            log_id,
+            requester,
+            rejected_by: tx_context::sender(ctx),
+            rejected_at: tx_context::epoch(ctx),
+            reason,
+        });
+    }
+
+    /// Get all access requests for a specific log (admin only)
+    public fun get_access_requests(
+        registry: &VeritasLogRegistry,
+        log_id: u64,
+        ctx: &TxContext
+    ): vector<AccessRequest> {
+        assert!(is_admin_internal(registry, ctx), E_APPROVE_FORBIDDEN);
+        let log_ref = table::borrow(&registry.logs, log_id);
+        *&log_ref.access_requests
+    }
+
+    /// Check if user can view log (admin, super_admin, or in allowed list)
+    public fun can_view_log(
+        registry: &VeritasLogRegistry,
+        log_id: u64,
+        ctx: &TxContext
+    ): bool {
+        let sender = tx_context::sender(ctx);
+        
+        // Admin & super admin can view all logs
+        if (is_admin_internal(registry, ctx)) {
+            return true
+        };
+
+        // Check if in allowed list
+        let log_ref = table::borrow(&registry.logs, log_id);
+        vector::contains(&log_ref.allowed, &sender)
     }
 
     public entry fun seal_approve(
@@ -168,7 +283,20 @@ module veritaslog::registry {
         while (i < len) {
             if (*vector::borrow(pending, i) == requester) {
                 vector::swap_remove(pending, i);
-                return;
+                return
+            };
+            i = i + 1;
+        };
+    }
+
+    /// Remove access request from vector
+    fun remove_access_request(requests: &mut vector<AccessRequest>, requester: address) {
+        let len = vector::length(requests);
+        let mut i = 0;
+        while (i < len) {
+            if (vector::borrow(requests, i).requester == requester) {
+                vector::swap_remove(requests, i);
+                return
             };
             i = i + 1;
         };
@@ -179,6 +307,29 @@ module veritaslog::registry {
         let sender = tx_context::sender(ctx);
         if (sender == registry.super_admin) { return true };
         vector::contains(&registry.admins, &sender)
+    }
+
+    // ==================== View functions for UI ====================
+    /// Get log details (anyone can call, but content access controlled elsewhere)
+    public fun get_log(
+        registry: &VeritasLogRegistry,
+        log_id: u64,
+    ): (String, address, vector<address>, u64, u8, vector<u8>, vector<address>) {
+        let log_ref = table::borrow(&registry.logs, log_id);
+        (
+            log_ref.walrus_cid,
+            log_ref.owner,
+            *&log_ref.allowed,
+            log_ref.created_at,
+            log_ref.severity_code,
+            *&log_ref.meta_commitment,
+            *&log_ref.pending,
+        )
+    }
+
+    /// Get total number of logs
+    public fun get_total_logs(registry: &VeritasLogRegistry): u64 {
+        registry.next_log_id
     }
 
     // ==================== Test-only functions ====================
